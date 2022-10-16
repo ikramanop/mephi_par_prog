@@ -33,7 +33,7 @@ fn main() -> anyhow::Result<()> {
                 PIVOT,
                 count_diff(&data, PIVOT as i32),
                 data.len()
-            )
+            )a
         }
         BitDepth::ThirtyTwoFloat(data) => {
             println!(
