@@ -1,14 +1,14 @@
 use anyhow::anyhow;
 use mephi_par_prog::{convert_i16, convert_i32, convert_u8, process_wav_file, ThreadParamsF32};
 use std::ffi::c_void;
+use std::ptr::{null, null_mut};
 use std::sync::mpsc::channel;
 use wav::BitDepth;
-#[cfg(windows)] use windows::Win32::System::Threading::{CreateThread, THREAD_CREATION_FLAGS};
+use libc::pthread_create;
 
 const PIVOT: usize = 1600;
 const THREADS: usize = 1;
 
-#[cfg(windows)]
 fn main() -> anyhow::Result<()> {
     let wav_data = process_wav_file(std::env::var("WAV_FILE_PATH").unwrap())?;
 
@@ -53,7 +53,6 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(windows)]
 unsafe fn count_diff_f32(data: &[f32]) -> f32 {
     let mut counter: f32 = 0f32;
 
@@ -66,15 +65,14 @@ unsafe fn count_diff_f32(data: &[f32]) -> f32 {
             i,
         };
 
-        CreateThread(
-            None,
-            0,
-            Some(thread_func_f32),
-            Some(&params as *const _ as *const c_void),
-            THREAD_CREATION_FLAGS(0),
-            None,
-        )
-        .unwrap();
+        let mut id = i.clone() as u64;
+
+        pthread_create(
+            &mut id,
+            null(),
+            thread_func_f32,
+            &params as *const _ as *mut c_void,
+        );
     }
     drop(tx);
 
@@ -85,9 +83,8 @@ unsafe fn count_diff_f32(data: &[f32]) -> f32 {
     counter
 }
 
-#[cfg(windows)]
-unsafe extern "system" fn thread_func_f32(lpthreadparameter: *mut c_void) -> u32 {
-    let params: &mut ThreadParamsF32 = &mut *(lpthreadparameter as *mut ThreadParamsF32);
+extern "C" fn thread_func_f32(lpthreadparameter: *mut c_void) -> *mut c_void {
+    let params: &mut ThreadParamsF32 = unsafe { &mut *(lpthreadparameter as *mut ThreadParamsF32) };
 
     let mut count = 0f32;
 
@@ -101,5 +98,5 @@ unsafe extern "system" fn thread_func_f32(lpthreadparameter: *mut c_void) -> u32
 
     params.tx.send(count).unwrap();
 
-    0
+    null_mut()
 }
