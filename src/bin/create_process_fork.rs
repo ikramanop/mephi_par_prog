@@ -1,104 +1,68 @@
-use anyhow::anyhow;
-use std::process::{Child, Command, Stdio};
-use mephi_par_prog::process_wav_file;
 use std::env;
-use std::io::Read;
+use anyhow::anyhow;
+use ipc_channel::ipc;
+use ipc_channel::ipc::IpcReceiverSet;
+use nix::unistd::ForkResult::{Child, Parent};
+use nix::unistd::fork;
 use wav::BitDepth;
+use mephi_par_prog::process_wav_file;
 
 const PIVOT: usize = 1600;
 const THREADS: usize = 6;
 
 fn main() -> anyhow::Result<()> {
-    let args = get_args();
+    let mut rx_set = IpcReceiverSet::new().unwrap();
 
-    if args.len() == 1 {
-        // main process
-        let mut child_processes = Vec::<Child>::new();
+    for i in 0..THREADS {
+        let pid = unsafe { fork() };
 
-        for i in 0..THREADS {
-            let cmd = format!("{:?} {}", env::current_exe().unwrap(), i);
+        match pid.expect("Fork Failed: Unable to create child process!") {
+            Child => {
+                let wav_data = process_wav_file(env::var("WAV_FILE_PATH").unwrap())?;
 
-            let child = Command::new(&cmd).stdout(Stdio::piped()).spawn()?;
-            child_processes.push(child);
-        }
+                let mut count = 0;
 
-        let mut counter = 0i32;
-
-        let mut count_finished = vec![0; THREADS];
-        let mut count_error = vec![0; THREADS];
-        loop {
-            for (i, child) in child_processes.iter_mut().enumerate() {
-                match child.try_wait() {
-                    Err(err) => {
-                        if count_finished[i] == 1 || count_error[i] == 1 {
-                            continue;
-                        }
-                        println!("Error with process {:?}", err);
-                        count_error[i] = 1;
+                match wav_data {
+                    BitDepth::Eight(data) => {
+                        count += count_diff(&data, PIVOT as u8, i as i32) as i32;
                     }
-                    Ok(Some(_status)) => {
-                        let mut result = Vec::<u8>::new();
-                        child.stdout.as_mut().unwrap().read(&mut result)?;
-
-                        counter += std::str::from_utf8(&result)?.parse::<i32>()?;
-
-                        count_finished[i] = 1;
+                    BitDepth::Sixteen(data) => {
+                        count += count_diff(&data, PIVOT as i16, i as i32) as i32;
                     }
-                    Ok(None) => {}
+                    BitDepth::TwentyFour(data) => {
+                        count += count_diff(&data, PIVOT as i32, i as i32) as i32;
+                    }
+                    BitDepth::ThirtyTwoFloat(data) => {
+                        count += count_diff(&data, PIVOT as f32, i as i32) as i32;
+                    }
+                    BitDepth::Empty => {
+                        return Err(anyhow!("Empty wav file"));
+                    }
                 }
-            }
 
-            if count_error.iter().sum::<i32>() == THREADS as i32 {
-                return Err(anyhow!("problems with processes %("));
-            }
+                let (tx, rx) = ipc::channel().unwrap();
+                rx_set.add(rx).unwrap();
 
-            if count_finished.iter().sum::<i32>() == THREADS as i32 {
+                tx.send(count).unwrap();
+
                 break;
             }
-        }
+            Parent { child } => {
+                let mut count = 0;
 
-        println!("Numbers bigger than {}: {},", PIVOT, counter);
-    } else {
-        // child process
+                for a in rx_set.select().unwrap().into_iter() {
+                    let (_, raw_data) = a.unwrap();
+                    let c: i32 = raw_data.to().unwrap();
 
-        let i = &get_args()[1].parse::<i32>()?;
+                    count += c;
+                }
 
-        let wav_data = process_wav_file(env::var("WAV_FILE_PATH").unwrap())?;
-
-        let mut count = 0i32;
-
-        match wav_data {
-            BitDepth::Eight(data) => {
-                count += count_diff(&data, PIVOT as u8, *i) as i32;
-            }
-            BitDepth::Sixteen(data) => {
-                count += count_diff(&data, PIVOT as i16, *i) as i32;
-            }
-            BitDepth::TwentyFour(data) => {
-                count += count_diff(&data, PIVOT as i32, *i) as i32;
-            }
-            BitDepth::ThirtyTwoFloat(data) => {
-                count += count_diff(&data, PIVOT as f32, *i) as i32;
-            }
-            BitDepth::Empty => {
-                return Err(anyhow!("Empty wav file"));
+                println!("Numbers bigger than {}: {},", PIVOT, count);
             }
         }
-
-        println!("{}", count)
     }
 
     Ok(())
-}
-
-fn get_args() -> Vec<String> {
-    let mut args = Vec::new();
-
-    for a in env::args() {
-        args.push(a)
-    }
-
-    args
 }
 
 fn count_diff<T>(data: &[T], pivot: T, i: i32) -> usize
