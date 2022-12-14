@@ -1,8 +1,8 @@
 use cuda_builder::CudaBuilder;
 
 fn main() {
-    CudaBuilder::new("../gpu/add_gpu")
-        .copy_to("../resources/add.ptx")
+    CudaBuilder::new("../gpu")
+        .copy_to("../resources/calc.ptx")
         .build()
         .unwrap();
 }
