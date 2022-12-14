@@ -16,22 +16,22 @@ fn main() {
     let size = world.size();
     let rank = world.rank();
 
+    let root_process = world.process_at_rank(0);
+
+    let mut count = -1;
+
     if rank == 0 {
         world.barrier();
 
-        let mut count = 0;
+        let mut a = vec![0u64; size as usize];
 
-        for _ in 1..size {
-            let (msg, _) = world.any_process().receive::<i32>();
+        root_process.gather_into_root(&count, &mut a[..]);
 
-            count += msg;
-        }
-
-        println!("Numbers bigger than {}: {},", PIVOT, count);
+        println!("Numbers bigger than {}: {},", PIVOT, a.iter().sum::<u64>());
     } else {
-        let count = process_func(rank, size - 1).unwrap();
+        count = process_func(rank, size - 1).unwrap();
 
-        world.process_at_rank(0).send(&count);
+        root_process.gather_into(&count);
 
         world.barrier();
     }
